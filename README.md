@@ -17,7 +17,7 @@ This repository contains tutorials that demonstrate how to implement **g-computa
   - **Parametric g-computation** (via regression models)
 - Includes comparison with unadjusted and stratified estimates
 
-### `gformula_timevarying.Rmd` *(coming soon or included)*
+### `gformula_timevarying.Rmd` *(coming soon)*
 - Introduces a longitudinal setup with time-varying treatments and confounders
 - Implements **iterated g-computation**
 - Illustrates how to model sequential treatment and outcome processes
