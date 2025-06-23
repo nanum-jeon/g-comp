@@ -20,13 +20,10 @@ This repository contains tutorials that demonstrate how to implement **g-computa
 ### `gformula_ML.Rmd`
 - **Machine Learning G-Formula Implementation**
 - Compares traditional parametric approaches with flexible ML methods
-- Demonstrates nuanced performance of Random Forest vs linear models:
+- Demonstrates when each approach excels through contrasting examples:
   - **Simple linear relationships**: Linear models outperform RF (RF adds unnecessary variance)
-  - **Complex non-linear relationships**: RF captures heterogeneous effects better but doesn't always improve marginal ATE estimates
-- Includes:
-  - Cross-validation performance comparison
-  - Treatment effect heterogeneity visualization
-  - Practical guidance on trade-offs between flexibility and bias/variance
+  - **Complex non-linear relationships**: RF captures intricate interaction patterns and heterogeneous treatment effects that parametric models miss
+ 
 
 ### Time-varying (coming soon)
 ---
