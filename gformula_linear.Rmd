@@ -1,0 +1,350 @@
+---
+title: "Introduction to G-Computation: Linear Model"
+author: "Nanum Jeon"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  fig.width = 8,
+  fig.height = 6
+)
+
+# Load required libraries
+library(dplyr)
+library(knitr)
+library(kableExtra)
+```
+
+# Introduction
+
+This tutorial demonstrates g-methods in a simplified static (cross-sectional) setting, based on concepts from [this paper](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6074945/) by Naimi, A. I., Cole, S. R., and Kennedy, E. H (2017). By removing the time-varying complexity, we can focus on the core principles of the g-formula for causal inference.
+
+In this tutorial, we will use the **g-formula** to estimate the average causal effect of treatment compared to no treatment. We'll demonstrate both non-parametric and parametric approaches to g-computation.
+
+## Our Settings
+
+We have a simple cross-sectional study examining the effect of HIV treatment ($A$) on CD4 count ($Y$). We observe a single baseline confounder, HIV viral load ($Z$), measured before treatment assignment. Unlike the longitudinal setting, all variables are measured at a single time point.
+
+Our variables are:
+- $Z$: HIV viral load at baseline (0 = low, 1 = high)  
+- $A$: Treatment status (0 = no treatment, 1 = treatment)
+- $Y$: CD4 count outcome
+
+We want to estimate the average causal effect of treatment ($a = 1$) compared to no treatment ($a = 0$). In this setup, the true average treatment effect (ATE) is 50.
+
+# G-Formula in Static Setting
+
+The g-formula allows us to estimate the average potential outcome under a hypothetical treatment intervention. In the static setting, the g-formula simplifies to:
+
+$$ E(Y^a) = \sum_z E(Y | A = a, Z = z) \cdot P(Z = z) $$
+
+This is essentially a standardization or adjustment formula where we:
+1. Compute the expected outcome for each level of the confounder $Z$
+2. Weight by the marginal distribution of $Z$ in the population
+
+Our estimand of interest is:
+$$\hat{\tau} = E[Y^{a=1}] - E[Y^{a=0}]$$
+
+## Data Setup
+
+```{r data-setup}
+# Simplified data for static setting
+# Z: Baseline HIV viral load (0 = low, 1 = high)
+# A: Treatment status (0 = no treatment, 1 = treatment)  
+# Y: CD4 count outcome
+# N: Number of subjects in each stratum
+
+z <- c(0, 0, 1, 1)
+a <- c(0, 1, 0, 1)
+y <- c(100, 150, 80, 130)
+n <- c(300, 200, 150, 350)
+
+data <- data.frame(z, a, y, n)
+
+# Display the data
+kable(data, 
+      caption = "Table 1: Cross-sectional Data",
+      col.names = c("Z (Viral Load)", "A (Treatment)", "Y (CD4 Count)", "N (Sample Size)")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+# Calculate marginal distribution of Z
+total_n <- sum(n)
+z_marginal <- data %>%
+  group_by(z) %>%
+  summarise(total = sum(n), prob = sum(n) / total_n, .groups = 'drop')
+
+kable(z_marginal,
+      caption = "Table 2: Marginal Distribution of Z",
+      col.names = c("Z (Viral Load)", "Count", "Probability"),
+      digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+## Non-parametric G-Formula
+
+### Treated Intervention (A = 1)
+
+```{r treated-intervention}
+# E[Y^{a=1}] - always treated
+# Get expected outcomes for treated group at each level of Z
+treated_outcomes <- data %>%
+  filter(a == 1) %>%
+  left_join(z_marginal %>% select(z, prob), by = "z") %>%
+  mutate(weighted_y = y * prob)
+
+expected_treated <- sum(treated_outcomes$weighted_y)
+
+kable(treated_outcomes %>% select(z, y, prob, weighted_y),
+      caption = "Table 3: Treated Intervention Calculation",
+      col.names = c("Z", "E(Y|A=1,Z)", "P(Z)", "Weighted Contribution"),
+      digits = 4) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+cat("Expected outcome under treatment: E[Y^{a=1}] =", round(expected_treated, 4), "\n")
+```
+
+### Untreated Intervention (A = 0)
+
+```{r untreated-intervention}
+# E[Y^{a=0}] - never treated
+# Get expected outcomes for untreated group at each level of Z
+untreated_outcomes <- data %>%
+  filter(a == 0) %>%
+  left_join(z_marginal %>% select(z, prob), by = "z") %>%
+  mutate(weighted_y = y * prob)
+
+expected_untreated <- sum(untreated_outcomes$weighted_y)
+
+kable(untreated_outcomes %>% select(z, y, prob, weighted_y),
+      caption = "Table 4: Untreated Intervention Calculation", 
+      col.names = c("Z", "E(Y|A=0,Z)", "P(Z)", "Weighted Contribution"),
+      digits = 4) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+cat("Expected outcome without treatment: E[Y^{a=0}] =", round(expected_untreated, 4), "\n")
+```
+
+### Results Summary
+
+```{r nonparam-results}
+# Calculate the average treatment effect
+ate_nonparam <- expected_treated - expected_untreated
+
+# Create results summary
+results_nonparam <- data.frame(
+  Intervention = c("Treated (A=1)", "Untreated (A=0)", "Average Treatment Effect"),
+  Expected_Outcome = c(round(expected_treated, 4), round(expected_untreated, 4), round(ate_nonparam, 4))
+)
+
+kable(results_nonparam,
+      caption = "Table 5: Non-parametric G-Formula Results",
+      col.names = c("Intervention", "Expected Outcome")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+cat("Non-parametric Average Treatment Effect:", round(ate_nonparam, 4), "\n")
+```
+
+This approach represents the **non-parametric maximum likelihood estimation** of the g-formula.
+
+# Parametric G-Formula
+
+Now we'll demonstrate the parametric approach using regression models. This is more practical when dealing with multiple confounders or continuous variables.
+
+## Step 1: Fit Models
+
+```{r fit-models}
+# Fit models for each component
+# Model for confounder Z (baseline characteristic)
+# Since Z is a baseline variable, we model its marginal distribution
+z_model_data <- data %>%
+  slice(rep(row_number(), n)) # Expand data based on sample sizes
+
+# Model for treatment A given Z
+a_model <- glm(a ~ z, family = binomial(), data = z_model_data)
+
+# Model for outcome Y given A and Z  
+y_model <- lm(y ~ a + z, data = data, weights = n)
+
+# Display model summaries
+cat("Treatment Model (A ~ Z):\n")
+summary(a_model)
+
+cat("\nOutcome Model (Y ~ A + Z):\n") 
+summary(y_model)
+```
+
+## Step 2: Generate Simulated Data
+
+```{r simulate-data}
+# Step 2: Generate simulated values for parametric g-formula
+set.seed(12345)
+sim_n <- 100000
+
+# Simulate Z from its marginal distribution
+z_sim <- sample(z_marginal$z, size = sim_n, replace = TRUE, prob = z_marginal$prob)
+
+# Simulate A given Z (though we'll override this for interventions)
+a_sim <- rbinom(n = sim_n, 
+                size = 1,
+                prob = predict(a_model, 
+                              newdata = data.frame(z = z_sim),
+                              type = "response"))
+
+# Create simulated dataset
+data_sim <- data.frame(z = z_sim, a = a_sim)
+
+cat("Simulation completed with", sim_n, "observations\n")
+cat("Z distribution:", table(z_sim), "\n")
+cat("A distribution:", table(a_sim), "\n")
+```
+
+## Step 3: Intervention and Prediction
+
+```{r parametric-intervention}
+# Intervene to set treatment status
+# Always treated (A = 1)
+y_treated <- predict(y_model,
+                    newdata = data_sim %>% mutate(a = 1),
+                    type = "response")
+
+# Never treated (A = 0)  
+y_untreated <- predict(y_model,
+                      newdata = data_sim %>% mutate(a = 0),
+                      type = "response")
+
+# Calculate average potential outcomes
+expected_treated_param <- mean(y_treated)
+expected_untreated_param <- mean(y_untreated)
+ate_param <- expected_treated_param - expected_untreated_param
+
+# Results summary
+results_param <- data.frame(
+  Intervention = c("Treated (A=1)", "Untreated (A=0)", "Average Treatment Effect"),
+  Expected_Outcome = c(round(expected_treated_param, 4), 
+                      round(expected_untreated_param, 4), 
+                      round(ate_param, 4))
+)
+
+kable(results_param,
+      caption = "Table 6: Parametric G-Formula Results",
+      col.names = c("Intervention", "Expected Outcome")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+cat("Parametric Average Treatment Effect:", round(ate_param, 4), "\n")
+```
+
+# Comparison with Simple Methods
+
+Let's compare our g-formula results with simpler approaches that don't properly adjust for confounding.
+
+```{r comparison-methods}
+# Crude (unadjusted) comparison
+crude_treated <- data %>% filter(a == 1) %>% summarise(mean = weighted.mean(y, n)) %>% pull()
+crude_untreated <- data %>% filter(a == 0) %>% summarise(mean = weighted.mean(y, n)) %>% pull()
+crude_effect <- crude_treated - crude_untreated
+
+# Simple stratified analysis (manual adjustment)
+stratified_effect <- data %>%
+  group_by(z) %>%
+  summarise(
+    treated_mean = y[a == 1],
+    untreated_mean = y[a == 0], 
+    diff = treated_mean - untreated_mean,
+    n_total = sum(n),
+    .groups = 'drop'
+  ) %>%
+  summarise(weighted_diff = weighted.mean(diff, n_total)) %>%
+  pull()
+
+# Summary comparison
+comparison <- data.frame(
+  Method = c("Crude (Unadjusted)", "Stratified Analysis", "Non-parametric G-Formula", "Parametric G-Formula"),
+  ATE_Estimate = c(round(crude_effect, 4), round(stratified_effect, 4), 
+                   round(ate_nonparam, 4), round(ate_param, 4)),
+  Notes = c("Ignores confounding", "Manual standardization", "Direct standardization", "Model-based")
+)
+
+kable(comparison,
+      caption = "Table 7: Comparison of Different Methods",
+      col.names = c("Method", "ATE Estimate", "Notes")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+# Understanding the Results
+
+```{r understanding-results}
+# Show the data structure to understand confounding
+data_summary <- data %>%
+  group_by(z) %>%
+  summarise(
+    n_total = sum(n),
+    prop_treated = sum(n[a == 1]) / sum(n),
+    mean_outcome_treated = y[a == 1],
+    mean_outcome_untreated = y[a == 0],
+    diff_within_stratum = y[a == 1] - y[a == 0],
+    .groups = 'drop'
+  )
+
+kable(data_summary,
+      caption = "Table 8: Understanding Confounding Structure",
+      col.names = c("Z", "Total N", "Prop. Treated", "Y|A=1", "Y|A=0", "Difference"),
+      digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+# Show why crude analysis is biased
+cat("Why the crude analysis is biased:\n")
+cat("- Higher viral load (Z=1) patients: more likely treated, worse baseline prognosis\n")
+cat("- Lower viral load (Z=0) patients: less likely treated, better baseline prognosis\n")
+cat("- This creates confounding that biases the crude estimate\n")
+cat("- G-formula adjusts by standardizing over the confounder distribution\n")
+```
+
+# Discussion
+
+In this simplified static setting, we've demonstrated the core concepts of the g-formula:
+
+1. **Non-parametric approach**: Direct standardization using the empirical distribution of confounders
+2. **Parametric approach**: Model-based estimation allowing for more complex relationships
+3. **Clarification: Non-parametric G-Formula vs. Stratified Standardization**: In this static setting with a binary confounder, the **non-parametric g-formula** is mathematically equivalent to what is often called **stratified standardization** in epidemiology.  
+
+Both involve computing \( E[Y \mid A = a, Z = z] \) within levels of \( Z \) and then weighting by the marginal distribution \( P(Z = z) \). The terminology differs by discipline—**standardization** emphasizes adjustment for confounding, while **g-computation** emphasizes potential outcomes under hypothetical interventions.  
+
+In essence, they are two interpretations of the same procedure.
+
+
+## Key Insights
+
+The g-formula provides several advantages:
+
+- **Handles confounding**: Unlike crude comparisons, it adjusts for measured confounders
+- **Interpretable**: Estimates population-level causal effects under hypothetical interventions  
+- **Flexible**: Can accommodate complex treatment regimes and multiple confounders
+- **Generalizable**: The parametric version can extrapolate beyond observed data combinations
+
+## When Methods Agree vs. Disagree
+
+In our example, the non-parametric and parametric g-formula give similar results, suggesting our linear model is well-specified. When they disagree substantially, it often indicates:
+
+- Model misspecification in the parametric approach
+- Insufficient data for reliable non-parametric estimation
+- Complex non-linear relationships requiring more flexible models
+
+## Extensions
+
+This static framework naturally extends to:
+
+- **Multiple confounders**: Simply expand the standardization
+- **Continuous confounders**: Use integration instead of summation
+- **Machine learning**: Replace simple regression with flexible algorithms
+- **Longitudinal settings**: Add time-varying confounders and treatments
+
+## References
+
+Naimi, A. I., Cole, S. R., & Kennedy, E. H. (2017). An introduction to g methods. *International Journal of Epidemiology*, 46(2), 756-762.

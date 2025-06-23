@@ -1,0 +1,430 @@
+---
+title: "Introduction to G-Computation: Machine Learning"
+author: "Nanum Jeon"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  fig.width = 10,
+  fig.height = 6
+)
+
+# Load required libraries
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(randomForest)
+library(ggplot2)
+library(gridExtra)
+```
+
+# Introduction
+
+This tutorial demonstrates g-methods comparing traditional parametric approaches with machine learning methods. We'll show when flexible models like random forests provide advantages over linear models in causal inference, particularly when relationships are highly non-linear.
+
+## Study Settings
+
+We examine the effect of HIV treatment ($A$) on CD4 count ($Y$) with viral load ($Z$) as a confounder. We'll compare three approaches:
+
+1. **Simple data**: Linear relationships (from original tutorial)
+2. **Complex data**: Highly non-linear relationships
+3. **Model comparison**: Linear regression vs Random Forest
+
+# Part 1: Simple Linear Data (Baseline)
+
+First, let's reproduce the basic example with simple relationships:
+
+```{r simple-data}
+# Simple tabular data from original tutorial
+z <- c(0, 0, 1, 1)
+a <- c(0, 1, 0, 1)
+y <- c(100, 150, 80, 130)
+n <- c(300, 200, 150, 350)
+
+data_simple <- data.frame(z, a, y, n)
+
+kable(data_simple, 
+      caption = "Table 1: Simple Cross-sectional Data",
+      col.names = c("Z (Viral Load)", "A (Treatment)", "Y (CD4 Count)", "N (Sample Size)")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+## G-Formula with Simple Data
+
+```{r simple-gformula}
+# Calculate marginal distribution of Z
+total_n <- sum(n)
+z_marginal <- data_simple %>%
+  group_by(z) %>%
+  summarise(total = sum(n), prob = sum(n) / total_n, .groups = 'drop')
+
+# Non-parametric G-formula
+treated_outcomes <- data_simple %>%
+  filter(a == 1) %>%
+  left_join(z_marginal %>% select(z, prob), by = "z") %>%
+  mutate(weighted_y = y * prob)
+
+untreated_outcomes <- data_simple %>%
+  filter(a == 0) %>%
+  left_join(z_marginal %>% select(z, prob), by = "z") %>%
+  mutate(weighted_y = y * prob)
+
+ate_simple_nonparam <- sum(treated_outcomes$weighted_y) - sum(untreated_outcomes$weighted_y)
+
+# Parametric G-formula (expand data and fit models)
+data_expanded <- data_simple %>% slice(rep(row_number(), n))
+
+# Fit models
+a_model_simple <- glm(a ~ z, family = binomial(), data = data_expanded)
+y_model_simple <- lm(y ~ a + z, data = data_simple, weights = n)
+
+# Simulate and predict
+set.seed(123)
+sim_n <- 10000
+z_sim <- sample(z_marginal$z, size = sim_n, replace = TRUE, prob = z_marginal$prob)
+sim_data <- data.frame(z = z_sim)
+
+y_treated_simple <- predict(y_model_simple, newdata = sim_data %>% mutate(a = 1))
+y_untreated_simple <- predict(y_model_simple, newdata = sim_data %>% mutate(a = 0))
+ate_simple_param <- mean(y_treated_simple) - mean(y_untreated_simple)
+
+# Random Forest
+rf_model_simple <- randomForest(y ~ a + z, data = data_expanded, ntree = 500)
+y_rf_treated_simple <- predict(rf_model_simple, newdata = sim_data %>% mutate(a = 1))
+y_rf_untreated_simple <- predict(rf_model_simple, newdata = sim_data %>% mutate(a = 0))
+ate_simple_rf <- mean(y_rf_treated_simple) - mean(y_rf_untreated_simple)
+
+cat("Simple Data Results:\n")
+cat("Non-parametric ATE:", round(ate_simple_nonparam, 2), "\n")
+cat("Linear model ATE:", round(ate_simple_param, 2), "\n")
+cat("Random Forest ATE:", round(ate_simple_rf, 2), "\n")
+```
+
+# Part 2: Complex Non-linear Data
+
+Now let's create data with strong non-linear relationships to demonstrate when Random Forest excels:
+
+```{r complex-data-generation}
+set.seed(42)
+n_obs <- 2000
+
+# Generate continuous confounder Z (viral load: 0-100)
+z_continuous <- runif(n_obs, min = 0, max = 100)
+
+# HIGHLY non-linear treatment assignment probability
+treatment_prob <- plogis(-3 + 0.15 * z_continuous - 0.004 * z_continuous^2 + 
+                        0.00008 * z_continuous^3 + 
+                        2 * sin(z_continuous * pi / 50) + 
+                        1.5 * cos(z_continuous * pi / 25))
+
+# Ensure reasonable probabilities
+treatment_prob <- pmax(0.1, pmin(0.9, treatment_prob))
+
+# Generate treatment assignment
+a_continuous <- rbinom(n_obs, 1, treatment_prob)
+
+# HIGHLY non-linear outcome model
+# Base CD4 count with multiple non-linear components
+baseline_cd4 <- 300 - 2 * z_continuous + 0.05 * z_continuous^2 - 0.0003 * z_continuous^3 +
+                30 * sin(z_continuous * pi / 30) - 20 * cos(z_continuous * pi / 40)
+
+# Treatment effect varies dramatically by viral load
+treatment_effect <- ifelse(z_continuous < 20, 
+                          80 + 2 * z_continuous,  # Strong effect for low viral load
+                          ifelse(z_continuous < 50,
+                                20 + 40 * sin((z_continuous - 20) * pi / 30),  # Oscillating
+                                100 - z_continuous + 0.02 * z_continuous^2))  # Decreasing
+
+# Interaction effect (treatment less effective in 60-80 range)
+interaction_effect <- ifelse(z_continuous > 60 & z_continuous < 80, -30, 0)
+
+# Final outcome
+y_continuous <- baseline_cd4 + a_continuous * (treatment_effect + interaction_effect) + 
+                rnorm(n_obs, 0, 15)
+
+# Create dataset
+data_complex <- data.frame(z = z_continuous, a = a_continuous, y = y_continuous)
+
+# Summary statistics
+summary_stats <- data_complex %>%
+  summarise(
+    n = n(),
+    z_mean = mean(z), z_sd = sd(z),
+    prop_treated = mean(a),
+    y_mean = mean(y), y_sd = sd(y)
+  )
+
+kable(summary_stats,
+      caption = "Table 2: Complex Data Summary Statistics",
+      col.names = c("N", "Z Mean", "Z SD", "Prop. Treated", "Y Mean", "Y SD"),
+      digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+## Visualizing Non-linear Relationships
+
+```{r complex-visualization}
+# Treatment probability by viral load
+p1 <- ggplot(data_complex, aes(x = z, y = a)) +
+  geom_smooth(method = "loess", se = TRUE, color = "blue") +
+  geom_point(alpha = 0.2, position = position_jitter(height = 0.02)) +
+  labs(title = "Treatment Probability by Viral Load",
+       x = "Viral Load (Z)", y = "Treatment Probability") +
+  theme_minimal()
+
+# Outcome by viral load and treatment
+p2 <- ggplot(data_complex, aes(x = z, y = y, color = factor(a))) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "loess", se = TRUE) +
+  labs(title = "CD4 Count by Viral Load and Treatment",
+       x = "Viral Load (Z)", y = "CD4 Count (Y)", color = "Treatment") +
+  scale_color_manual(values = c("red", "blue"), labels = c("Untreated", "Treated")) +
+  theme_minimal()
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+# Model Fitting and Comparison
+
+## Fit All Models
+
+```{r model-fitting}
+# Linear models
+treatment_model_linear <- glm(a ~ z + I(z^2), family = binomial(), data = data_complex)
+outcome_model_linear <- lm(y ~ a * z + I(z^2), data = data_complex)
+
+# More complex linear model
+treatment_model_poly <- glm(a ~ poly(z, 4), family = binomial(), data = data_complex)
+outcome_model_poly <- lm(y ~ a * poly(z, 4), data = data_complex)
+
+# Random Forest models
+set.seed(123)
+treatment_model_rf <- randomForest(factor(a) ~ z, data = data_complex, 
+                                  ntree = 1000, nodesize = 10, importance = TRUE)
+outcome_model_rf <- randomForest(y ~ a + z, data = data_complex, 
+                                ntree = 1000, nodesize = 10, importance = TRUE)
+
+# Model performance summaries
+cat("Model Performance Summary:\n")
+cat("Linear outcome R²:", round(summary(outcome_model_linear)$r.squared, 3), "\n")
+cat("Polynomial outcome R²:", round(summary(outcome_model_poly)$r.squared, 3), "\n")
+cat("RF outcome % Var Explained:", round(outcome_model_rf$rsq[length(outcome_model_rf$rsq)] * 100, 1), "%\n")
+```
+
+## G-Formula Implementation
+
+```{r gformula-implementation}
+# Simulation setup
+set.seed(456)
+sim_n <- 10000
+z_sim <- sample(data_complex$z, size = sim_n, replace = TRUE)
+sim_data <- data.frame(z = z_sim)
+
+# Calculate true ATE (oracle)
+true_treatment_effect <- ifelse(z_sim < 20, 
+                               80 + 2 * z_sim,
+                               ifelse(z_sim < 50,
+                                     20 + 40 * sin((z_sim - 20) * pi / 30),
+                                     100 - z_sim + 0.02 * z_sim^2))
+true_interaction <- ifelse(z_sim > 60 & z_sim < 80, -30, 0)
+true_ate <- mean(true_treatment_effect + true_interaction)
+
+# Linear model predictions
+y_linear_treated <- predict(outcome_model_linear, newdata = sim_data %>% mutate(a = 1))
+y_linear_untreated <- predict(outcome_model_linear, newdata = sim_data %>% mutate(a = 0))
+ate_linear <- mean(y_linear_treated) - mean(y_linear_untreated)
+
+# Polynomial model predictions
+y_poly_treated <- predict(outcome_model_poly, newdata = sim_data %>% mutate(a = 1))
+y_poly_untreated <- predict(outcome_model_poly, newdata = sim_data %>% mutate(a = 0))
+ate_poly <- mean(y_poly_treated) - mean(y_poly_untreated)
+
+# Random Forest predictions
+y_rf_treated <- predict(outcome_model_rf, newdata = sim_data %>% mutate(a = 1))
+y_rf_untreated <- predict(outcome_model_rf, newdata = sim_data %>% mutate(a = 0))
+ate_rf <- mean(y_rf_treated) - mean(y_rf_untreated)
+
+# Crude estimate
+crude_treated <- mean(data_complex$y[data_complex$a == 1])
+crude_untreated <- mean(data_complex$y[data_complex$a == 0])
+crude_ate <- crude_treated - crude_untreated
+```
+
+# Results Comparison
+
+```{r results-comparison}
+# Create comprehensive results table
+results_comparison <- data.frame(
+  Method = c("True ATE", "Crude (Unadjusted)", "Linear G-Formula", 
+             "Polynomial G-Formula", "Random Forest G-Formula"),
+  ATE_Estimate = c(round(true_ate, 2), round(crude_ate, 2), round(ate_linear, 2), 
+                   round(ate_poly, 2), round(ate_rf, 2)),
+  Bias = c(0, round(crude_ate - true_ate, 2), round(ate_linear - true_ate, 2),
+           round(ate_poly - true_ate, 2), round(ate_rf - true_ate, 2)),
+  Abs_Bias = c(0, round(abs(crude_ate - true_ate), 2), round(abs(ate_linear - true_ate), 2),
+               round(abs(ate_poly - true_ate), 2), round(abs(ate_rf - true_ate), 2)),
+  Notes = c("Oracle truth", "Ignores confounding", "Simple linear model", 
+            "Higher-order polynomials", "Flexible ML approach")
+)
+
+kable(results_comparison,
+      caption = "Table 3: G-Formula Results Comparison",
+      col.names = c("Method", "ATE Estimate", "Bias", "Absolute Bias", "Notes")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+# Performance insights
+rf_improvement <- round(abs(ate_linear - true_ate) / abs(ate_rf - true_ate), 1)
+cat("\n*** KEY FINDINGS ***\n")
+cat("True ATE:", round(true_ate, 2), "\n")
+cat("Linear model bias:", round(abs(ate_linear - true_ate), 2), "\n")
+cat("Random Forest bias:", round(abs(ate_rf - true_ate), 2), "\n")
+cat("RF performs", rf_improvement, "times better than simple linear model!\n")
+```
+
+# Model Performance Analysis
+
+```{r performance-analysis}
+# Cross-validation comparison
+library(caret)
+set.seed(789)
+cv_folds <- createFolds(data_complex$y, k = 5)
+
+# Function to calculate RMSE
+calculate_rmse <- function(actual, predicted) {
+  sqrt(mean((actual - predicted)^2, na.rm = TRUE))
+}
+
+# Initialize RMSE vectors
+rmse_linear <- rmse_poly <- rmse_rf <- numeric(5)
+
+# Cross-validation loop
+for(i in 1:5) {
+  train_idx <- unlist(cv_folds[-i])
+  test_idx <- cv_folds[[i]]
+  
+  train_data <- data_complex[train_idx, ]
+  test_data <- data_complex[test_idx, ]
+  
+  # Fit models
+  linear_cv <- lm(y ~ a * z + I(z^2), data = train_data)
+  poly_cv <- lm(y ~ a * poly(z, 4), data = train_data)
+  rf_cv <- randomForest(y ~ a + z, data = train_data, ntree = 500)
+  
+  # Predictions
+  pred_linear <- predict(linear_cv, test_data)
+  pred_poly <- predict(poly_cv, test_data)
+  pred_rf <- predict(rf_cv, test_data)
+  
+  # RMSE calculation
+  rmse_linear[i] <- calculate_rmse(test_data$y, pred_linear)
+  rmse_poly[i] <- calculate_rmse(test_data$y, pred_poly)
+  rmse_rf[i] <- calculate_rmse(test_data$y, pred_rf)
+}
+
+# Performance summary
+performance_summary <- data.frame(
+  Model = c("Linear", "Polynomial", "Random Forest"),
+  Mean_RMSE = c(mean(rmse_linear), mean(rmse_poly), mean(rmse_rf)),
+  SD_RMSE = c(sd(rmse_linear), sd(rmse_poly), sd(rmse_rf)),
+  Improvement_vs_Linear = c("—", 
+                           paste0(round((mean(rmse_linear) - mean(rmse_poly))/mean(rmse_linear)*100, 1), "%"),
+                           paste0(round((mean(rmse_linear) - mean(rmse_rf))/mean(rmse_linear)*100, 1), "%"))
+)
+
+kable(performance_summary,
+      caption = "Table 4: Cross-Validation Performance",
+      col.names = c("Model", "Mean RMSE", "SD RMSE", "Improvement"),
+      digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+# Treatment Effect Visualization
+
+```{r treatment-effect-visualization}
+# Create prediction range
+z_plot_range <- seq(0, 100, length.out = 200)
+plot_data <- data.frame(z = z_plot_range)
+
+# Calculate true treatment effect
+true_te_plot <- ifelse(z_plot_range < 20, 
+                       80 + 2 * z_plot_range,
+                       ifelse(z_plot_range < 50,
+                             20 + 40 * sin((z_plot_range - 20) * pi / 30),
+                             100 - z_plot_range + 0.02 * z_plot_range^2))
+true_interaction_plot <- ifelse(z_plot_range > 60 & z_plot_range < 80, -30, 0)
+true_te_total <- true_te_plot + true_interaction_plot
+
+# Model predictions
+pred_linear_treated <- predict(outcome_model_linear, newdata = plot_data %>% mutate(a = 1))
+pred_linear_untreated <- predict(outcome_model_linear, newdata = plot_data %>% mutate(a = 0))
+te_linear <- pred_linear_treated - pred_linear_untreated
+
+pred_poly_treated <- predict(outcome_model_poly, newdata = plot_data %>% mutate(a = 1))
+pred_poly_untreated <- predict(outcome_model_poly, newdata = plot_data %>% mutate(a = 0))
+te_poly <- pred_poly_treated - pred_poly_untreated
+
+pred_rf_treated <- predict(outcome_model_rf, newdata = plot_data %>% mutate(a = 1))
+pred_rf_untreated <- predict(outcome_model_rf, newdata = plot_data %>% mutate(a = 0))
+te_rf <- pred_rf_treated - pred_rf_untreated
+
+# Create plotting dataframe
+te_df <- data.frame(
+  z = rep(z_plot_range, 4),
+  treatment_effect = c(true_te_total, te_linear, te_poly, te_rf),
+  model = rep(c("True Effect", "Linear", "Polynomial", "Random Forest"), each = 200)
+)
+
+# Plot treatment effects
+p_te <- ggplot(te_df, aes(x = z, y = treatment_effect, color = model, linetype = model)) +
+  geom_line(size = 1.2) +
+  labs(title = "Treatment Effect by Viral Load: Model Comparison",
+       subtitle = "Random Forest captures the complex true pattern best",
+       x = "Viral Load (Z)", y = "Treatment Effect",
+       color = "Model", linetype = "Model") +
+  theme_minimal() +
+  scale_color_manual(values = c("black", "red", "blue", "darkgreen")) +
+  scale_linetype_manual(values = c("solid", "dashed", "dotted", "solid")) +
+  theme(legend.position = "bottom")
+
+print(p_te)
+```
+
+# Summary and Discussion
+
+## Key Findings
+
+1. **Simple data**: Linear models outperform Random Forest when relationships are approximately linear. In this setting, Random Forest introduces unnecessary variance and yields higher bias in ATE estimation.
+2. **Complex data**: Random Forest captures highly non-linear and heterogeneous treatment effects more accurately than linear or polynomial models. However, this improved flexibility in conditional modeling does not always translate to better marginal ATE estimates.
+3. **Prediction accuracy**: Random Forest improves out-of-sample prediction accuracy by `r round((mean(rmse_linear) - mean(rmse_rf))/mean(rmse_linear)*100, 1)`% over the linear model, based on cross-validated RMSE.
+
+## When to Use Random Forest for G-Formula
+
+Random Forest excels when:
+
+- **Complex relationships**: Non-linear interactions between variables
+- **High-dimensional data**: Many confounders
+- **Unknown functional form**: Uncertainty about true relationships
+- **Robustness needed**: Less sensitive to outliers and misspecification
+
+## Practical Recommendations
+
+1. **Start simple**: Begin with linear models for interpretability
+2. **Compare approaches**: Use cross-validation to assess performance
+3. **Visualize patterns**: Plot treatment effects to understand relationships
+4. **Consider trade-offs**: Balance flexibility vs interpretability
+5. **Validate results**: Use multiple approaches for robustness
+
+ 
+
+## References
+
+- Naimi, A. I., Cole, S. R., & Kennedy, E. H. (2017). An introduction to g methods. *International Journal of Epidemiology*, 46(2), 756-762.
+- Breiman, L. (2001). Random forests. *Machine Learning*, 45(1), 5-32.
+- D'Amour, A., et al. (2021). Overlap in observational studies with high-dimensional covariates. *Journal of Econometrics*, 221(2), 644-654.
