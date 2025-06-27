@@ -8,7 +8,7 @@ A comprehensive introduction to causal inference using g-methods, implemented in
 |----------|-------|--------|------------|
 | **01** | [G-Formula: Static Confounders](01_g-formula_intro_static-confounders.Rmd) | G-computation | 🟢 Beginner |
 | **02** | [G-Formula: Time-Varying Confounders](02_g-formula_intro_time-varying-confounders.Rmd) | G-computation | 🟡 Intermediate |
-| **03** | [G-Formula: Linear vs ML Models](03_g-formula_linear-vs-ml.Rmd) | G-computation | 🟠 Advanced |
+| **03** | [G-Formula: Linear vs ML Models](03_g-formula_linear-vs-ml.Rmd) | G-computation | 🟡 Intermediate |
 | **04** | [MSM: Time-Varying Confounders](04_g-formula_msm_time-varying.Rmd) | Inverse Probability Weighting | 🟡 Intermediate |
 
 ## Learning Path
