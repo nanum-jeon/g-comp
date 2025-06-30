@@ -255,25 +255,12 @@ crude_treated <- data %>% filter(a == 1) %>% summarise(mean = weighted.mean(y, n
 crude_untreated <- data %>% filter(a == 0) %>% summarise(mean = weighted.mean(y, n)) %>% pull()
 crude_effect <- crude_treated - crude_untreated
 
-# Simple stratified analysis (manual adjustment)
-stratified_effect <- data %>%
-  group_by(z) %>%
-  summarise(
-    treated_mean = y[a == 1],
-    untreated_mean = y[a == 0], 
-    diff = treated_mean - untreated_mean,
-    n_total = sum(n),
-    .groups = 'drop'
-  ) %>%
-  summarise(weighted_diff = weighted.mean(diff, n_total)) %>%
-  pull()
-
 # Summary comparison
 comparison <- data.frame(
-  Method = c("Crude (Unadjusted)", "Stratified Analysis", "Non-parametric G-Formula", "Parametric G-Formula"),
-  ATE_Estimate = c(round(crude_effect, 4), round(stratified_effect, 4), 
+  Method = c("Crude (Unadjusted)", "Non-parametric G-Formula", "Parametric G-Formula"),
+  ATE_Estimate = c(round(crude_effect, 4), 
                    round(ate_nonparam, 4), round(ate_param, 4)),
-  Notes = c("Ignores confounding", "Manual standardization", "Direct standardization", "Model-based")
+  Notes = c("Ignores confounding", "Direct standardization", "Model-based")
 )
 
 kable(comparison,
@@ -289,28 +276,15 @@ In this simplified static setting, we've demonstrated the core concepts of the g
 
 1. **Non-parametric approach**: Direct standardization using the empirical distribution of confounders
 2. **Parametric approach**: Model-based estimation allowing for more complex relationships
-3. **Clarification: Non-parametric G-Formula vs. Stratified Standardization**: In this static setting with a binary confounder, the **non-parametric g-formula** is mathematically equivalent to what is often called **stratified standardization** in epidemiology.  
 
-Both involve computing \( E[Y \mid A = a, Z = z] \) within levels of \( Z \) and then weighting by the marginal distribution \( P(Z = z) \). The terminology differs by discipline—**standardization** emphasizes adjustment for confounding, while **g-computation** emphasizes potential outcomes under hypothetical interventions.  
+Both involve computing \( E[Y \mid A = a, Z = z] \) within levels of \( Z \) and then weighting by the marginal distribution \( P(Z = z) \). 
 
-In essence, they are two interpretations of the same procedure.
-
-
-## Key Insights
-
-The g-formula provides several advantages:
-
-- **Handles confounding**: Unlike crude comparisons, it adjusts for measured confounders
-- **Interpretable**: Estimates population-level causal effects under hypothetical interventions  
-- **Flexible**: Can accommodate complex treatment regimes and multiple confounders
-- **Generalizable**: The parametric version can extrapolate beyond observed data combinations
 
 ## When Methods Agree vs. Disagree
 
 In our example, the non-parametric and parametric g-formula give similar results, suggesting our linear model is well-specified. When they disagree substantially, it often indicates:
 
 - Model misspecification in the parametric approach
-- Insufficient data for reliable non-parametric estimation
 - Complex non-linear relationships requiring more flexible models
 
 ## Extensions
