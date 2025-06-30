@@ -138,7 +138,7 @@ z3 <- rbinom(n_obs, 1, 0.3)   # Comorbidity (0/1)
 
 # Complex non-linear treatment assignment with smooth relationships
 treatment_logit <- -1.5 + 
-  # Smooth S-curve for viral load (sicker patients less likely to get treatment)
+  # Smooth S-curve for viral load (sicker patients more likely to get treatment)
   3 * plogis((z1 - 50) / 20) - 1.5 +
   
   # Smooth inverse-U for age (middle-aged more likely to get treatment)
@@ -281,7 +281,7 @@ outcome_model_rf <- randomForest(y ~ a + z1 + z2 + z3, data = data_complex,
 cat("Model Performance Summary:\n")
 cat("Linear outcome R²:", round(summary(outcome_model_linear)$r.squared, 3), "\n")
 cat("Polynomial outcome R²:", round(summary(outcome_model_poly)$r.squared, 3), "\n")
-cat("RF outcome % Var Explained:", round(tail(outcome_model_rf$rsq, 1) * 100, 1), "%\n")
+cat("RF outcome % Var Explained:", round(tail(outcome_model_rf$rsq, 3), 1), "\n")
 ```
 
 ## G-Formula Implementation
