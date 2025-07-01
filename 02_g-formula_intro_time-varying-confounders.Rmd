@@ -78,6 +78,7 @@ $$E[Y^{a_0, a_1}] = \sum_{z_1} E[Y | A_1 = a_1, Z_1 = z_1, A_0 = a_0] \cdot P(Z_
 
 ```{r nonparam_weights}
 # Calculate empirical probabilities P(Z1 | A0)
+# Calculate empirical probabilities P(Z1 | A0)
 z1_probs <- data %>%
   group_by(a0, z1) %>%
   summarise(count = sum(n), .groups = 'drop') %>%
@@ -86,18 +87,20 @@ z1_probs <- data %>%
     total = sum(count),
     prob = count / total
   ) %>%
-  select(a0, z1, prob)
+  select(a0, z1, prob) %>%
+  arrange(desc(a0), z1)  # Order by A0 descending (1 first), then Z1 ascending
 
 kable(z1_probs, 
       caption = "Empirical Probabilities P(Z1 | A0)",
-      col.names = c("A0", "Z1", "P(Z1 \\mid A0)"),
+      col.names = c("A0", "Z1", "P(Z1 | A0)"),
       digits = 4) %>%
   kable_styling(bootstrap_options = c("striped", "hover"))
 ```
 
 ## Step 2: Calculate Potential Outcomes
 
-```{r nonparam_outcomes}
+
+```{r}
 # Function to calculate potential outcome under intervention (a0, a1)
 calculate_potential_outcome <- function(a0_val, a1_val) {
   
@@ -121,23 +124,74 @@ calculate_potential_outcome <- function(a0_val, a1_val) {
   return(result)
 }
 
+# Function to create detailed breakdown table with E[Y|Z1,A] and P(Z1)
+create_detailed_table <- function(a0_val, a1_val, intervention_name) {
+  
+  # Get relevant probabilities P(Z1 | A0 = a0_val)
+  probs <- z1_probs %>% filter(a0 == a0_val)
+  
+  # Get outcome values E[Y | A0 = a0_val, Z1, A1 = a1_val]
+  outcomes <- data %>% 
+    filter(a0 == a0_val, a1 == a1_val) %>%
+    group_by(z1) %>%
+    summarise(
+      expected_y = mean(y, na.rm = TRUE),
+      .groups = 'drop'
+    )
+  
+  # Combine probabilities and outcomes
+  detailed_table <- probs %>%
+    left_join(outcomes, by = "z1") %>%
+    mutate(
+      intervention = intervention_name,
+      weighted_outcome = prob * expected_y
+    ) %>%
+    select(
+      Intervention = intervention,
+      Z1 = z1,
+      `P(Z1)` = prob,
+      `E[Y|Z1,A]` = expected_y,
+      `P(Z1) * E[Y|Z1,A]` = weighted_outcome
+    )
+  
+  return(detailed_table)
+}
+
 # Calculate potential outcomes
 always_treated <- calculate_potential_outcome(a0_val = 1, a1_val = 1)
 never_treated <- calculate_potential_outcome(a0_val = 0, a1_val = 0)
 
-# Results
-nonparam_results <- data.frame(
-  Intervention = c("Always treated (1,1)", "Never treated (0,0)"),
-  Potential_Outcome = c(always_treated, never_treated)
-)
+# Create detailed breakdown tables
+always_treated_table <- create_detailed_table(a0_val = 1, a1_val = 1, "Always treated (1,1)")
+never_treated_table <- create_detailed_table(a0_val = 0, a1_val = 0, "Never treated (0,0)")
 
-nonparam_ate <- always_treated - never_treated
+# Combine detailed tables
+detailed_breakdown <- rbind(always_treated_table, never_treated_table)
 
-kable(nonparam_results, 
-      caption = "Nonparametric G-Computation Results",
+# Display detailed breakdown table
+kable(detailed_breakdown, 
+      caption = "Detailed Breakdown: E[Y|Z1,A] and P(Z1) by Intervention",
+      digits = 4) %>%
+  kable_styling(bootstrap_options = c("striped", "hover")) %>%
+  pack_rows("Always treated (1,1)", 1, nrow(always_treated_table)) %>%
+  pack_rows("Never treated (0,0)", nrow(always_treated_table) + 1, nrow(detailed_breakdown))
+
+# Summary table with totals
+summary_table <- detailed_breakdown %>%
+  group_by(Intervention) %>%
+  summarise(
+    `Total E[Y(a, a)]` = sum(`P(Z1) * E[Y|Z1,A]`, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+kable(summary_table, 
+      caption = "Summary: Potential Outcomes by Intervention",
       digits = 4) %>%
   kable_styling(bootstrap_options = c("striped", "hover"))
 
+
+# Calculate and display ATE
+nonparam_ate <- always_treated - never_treated
 cat("Nonparametric ATE:", round(nonparam_ate, 4), "\n")
 ```
 
@@ -154,11 +208,6 @@ z1_model <- glm(z1 ~ a0,
                 data = data, 
                 weights = n)
 
-a1_model <- glm(a1 ~ z1, 
-                family = binomial(), 
-                data = data, 
-                weights = n)
-
 y_model <- lm(y ~ a0 + z1 + a1 + a0*a1 + z1*a1, 
               data = data, 
               weights = n)
@@ -167,9 +216,6 @@ y_model <- lm(y ~ a0 + z1 + a1 + a0*a1 + z1*a1,
 cat("Model summaries:\n\n")
 cat("Z1 Model (P(Z1 | A0)):\n")
 print(summary(z1_model)$coefficients)
-
-cat("\nA1 Model (P(A1 | Z1)):\n") 
-print(summary(a1_model)$coefficients)
 
 cat("\nY Model (E[Y | A0, Z1, A1]):\n")
 print(summary(y_model)$coefficients)

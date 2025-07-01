@@ -181,7 +181,7 @@ Now we fit the outcome model using the weighted data to estimate causal effects.
 ```{r msm_fitting}
 # Fit MSM using inverse probability weights
 # The model directly estimates marginal causal effects
-msm_model <- lm(y ~ a0 + a1 + a0*a1, data = expanded_data, weights = ipw)
+msm_model <- lm(y ~ a0 + a1, data = expanded_data, weights = ipw)
 
 print("MSM Model Summary:")
 summary(msm_model)
@@ -226,21 +226,6 @@ One key advantage of IPW is that it should balance confounders across treatment 
 
 
 ```{r balance_check}
-# Check balance of Z1 across A0 groups before and after weighting
-balance_check <- expanded_data %>%
-  group_by(a0) %>%
-  summarise(
-    n = n(),
-    mean_z1_unweighted = mean(z1),
-    mean_z1_weighted = weighted.mean(z1, ipw),
-    .groups = 'drop'
-  )
-
-print("Balance Check - Z1 by A0:")
-kable(balance_check, digits = 4, 
-      caption = "Balance of Z1 across A0 groups (Before and After Weighting)") %>%
-  kable_styling(bootstrap_options = c("striped", "hover"))
-
 # Check balance of Z1 across A1 groups
 balance_check_a1 <- expanded_data %>%
   group_by(a1) %>%
