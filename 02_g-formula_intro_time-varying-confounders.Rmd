@@ -43,7 +43,7 @@ The empirical setting is to treat HIV with a therapy regimen (A) in two time per
 
 **Causal structure**: Z0 → A0 → Z1 → A1 → Y  
 
-**Target estimand**: E[Y^{1,1}] - E[Y^{0,0}] (always treated vs. never treated)
+**Target estimand**: $E[Y^{1,1}] - E[Y^{0,0}]$ (always treated vs. never treated)
 
 ## Data Setup
 
