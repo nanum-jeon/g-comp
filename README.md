@@ -7,7 +7,7 @@ Comprehensive introduction to causal inference using g-methods in R. Covers **G-
 | **01** | [Introduction to G-Computation](01_g_comp_intro.Rmd) | G-computation | 🟢 Beginner |
 | **02** | [Linear vs. ML Models](02_g_comp_linear-vs-ml.Rmd) | G-computation | 🟡 Intermediate |
 | **03** | [Heterogeneous Treatment Effects](03_g_comp_hte.Rmd) | G-computation | 🟡 Intermediate |
-| **04** | [Time-varying Confounders](04_g_comp_time-varying.Rmd) | G-computation | 🟡 Intermediate |
+| **04** | [Time-varying Confounders](04_g_comp_intro_time_varying.Rmd) | G-computation | 🟡 Intermediate |
 | **05** | [Marginal Structural Models](05_msm_time-varying.Rmd) | Inverse Probability Weighting | 🟡 Intermediate |
 
 ## Learning Paths
