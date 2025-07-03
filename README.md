@@ -1,77 +1,48 @@
 # G-Methods Tutorial Series
-A comprehensive introduction to causal inference using g-methods, implemented in R. This tutorial series covers the two major approaches for handling time-varying confounders: **G-formula** and **Marginal Structural Models (MSM)**.
+Comprehensive introduction to causal inference using g-methods in R. Covers **G-formula** and **Marginal Structural Models (MSM)** for handling time-varying confounders.
 
 ## Tutorial Overview
-| Tutorial | Focus | Method | Complexity |
-|----------|-------|--------|------------|
+| Tutorial | Focus | Method | Level |
+|----------|-------|--------|-------|
 | **01** | [Introduction to G-Computation](01_g_comp_intro.Rmd) | G-computation | 🟢 Beginner |
-| **02** | [G-Computation: Linear vs. ML Model](02_g_comp_linear-vs-ml.Rmd) | G-computation | 🟡 Intermediate |
-| **03** | [G-Computation: Heterogeneous Treatment Effect Estimation](03_g_comp_hte.Rmd) | G-computation | 🟡 Intermediate |
-| **04** | [G-Computation: Time-varying](04_g_comp_time-varying.Rmd) | G-Computation | 🟡 Intermediate |
-| **05** | [MSM: Time-varying](05_msm_time-varying.Rmd) | Inverse Probability Weighting | 🟡 Intermediate |
+| **02** | [Linear vs. ML Models](02_g_comp_linear-vs-ml.Rmd) | G-computation | 🟡 Intermediate |
+| **03** | [Heterogeneous Treatment Effects](03_g_comp_hte.Rmd) | G-computation | 🟡 Intermediate |
+| **04** | [Time-varying Confounders](04_g_comp_time-varying.Rmd) | G-computation | 🟡 Intermediate |
+| **05** | [Marginal Structural Models](05_msm_time-varying.Rmd) | Inverse Probability Weighting | 🟡 Intermediate |
 
-## Learning Path
-**For beginners:** Start with Tutorial 01 → 02  
-**For comprehensive coverage:** Complete all tutorials 01 → 02 → 03 → 04 → 05  
-**For method comparison:** Focus on Tutorials 04 and 05
+## Learning Paths
+- **Beginners:** 01 → 02
+- **Complete series:** 01 → 02 → 03 → 04 → 05
+- **Method comparison:** 04 vs 05
 
 ## What You'll Learn
-### Core Concepts
-- When and why standard regression fails with time-varying confounders
-- Two major g-methods: G-Computation and MSM/IPW
-- Nonparametric vs parametric approaches
-- Model selection considerations
+**Core concepts:** Why standard regression fails with time-varying confounders, g-methods (G-formula and MSM/IPW), parametric vs nonparametric approaches, model selection
 
-### Practical Skills
-- Implementing g-computation in R
-- Fitting and validating causal models
-- Comparing linear models vs machine learning approaches
-- Calculating and interpreting marginal structural models
+**Practical skills:** G-computation implementation, model validation, linear vs ML comparison, marginal structural models
 
 ## Prerequisites
-- **R Programming**: Intermediate level
-- **Statistics**: Regression analysis, basic probability
-- **Causal Inference**: Helpful but not required (concepts explained)
-
+- **R:** Intermediate level
+- **Statistics:** Regression, basic probability
+- **Causal inference:** Not required
 
 ## Tutorial Details
-### Tutorial 01: G-Formula with Static Confounders
-**Goal**: Master basic g-computation concepts  
-**Methods**: Nonparametric and parametric g-formula  
+**01: Introduction** - Master basic g-computation with nonparametric and parametric g-formula
 
-### Tutorial 02: G-Formula with Time-Varying Confounders  
-**Goal**: Handle temporal confounding  
-**Methods**: Sequential g-computation  
+**02: Linear vs. ML** - Choose appropriate models comparing linear regression vs machine learning
 
-### Tutorial 03: G-Formula Model Comparison
-**Goal**: Choose appropriate models for g-computation  
-**Methods**: Linear regression vs machine learning  
+**03: Heterogeneous Treatment Effects** - Estimate treatment effect heterogeneity using g-computation
 
-### Tutorial 04: G-Computation with Time-Varying Confounders
-**Goal**: Advanced g-computation techniques  
-**Methods**: Sequential g-computation with complex confounding  
+**04: Time-varying Confounders** - Handle temporal confounding with sequential g-computation
 
-### Tutorial 05: Marginal Structural Models
-**Goal**: Alternative approach to time-varying confounding  
-**Methods**: Inverse probability weighting  
+**05: Marginal Structural Models** - Alternative approach using inverse probability weighting
 
 ## Dataset
-All tutorials use simulated HIV treatment data from [Naimi, Cole, and Kennedy (2017)](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6074945/):
-- **Setting**: HIV treatment over 2 time periods
-- **Treatment**: Therapy regimen (A₀, A₁)  
-- **Confounder**: Time-varying viral load (Z₁)
-- **Outcome**: CD4 count (Y)
-- **True causal effect**: 50 (known from data generation)
+Simulated HIV treatment data from [Naimi, Cole, and Kennedy (2017)](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6074945/): HIV treatment over 2 periods with therapy regimen (A₀, A₁), time-varying viral load (Z₁), CD4 outcome (Y), and known true effect of 50.
 
 ## Quick Start
-1. **Clone or download** all `.Rmd` files
-3. **Start with Tutorial 01** to build foundations
-4. **Progress sequentially** through the series
-
+1. Download all `.Rmd` files
+2. Start with Tutorial 01
+3. Progress sequentially
 
 ## Citation
-Based on methodology from:
 > Naimi, A. I., Cole, S. R., & Kennedy, E. H. (2017). An introduction to g methods. *International Journal of Epidemiology*, 46(2), 756-762.
-
----
-**Happy learning!** These tutorials provide a complete foundation for applying g-methods in your own causal inference projects.
