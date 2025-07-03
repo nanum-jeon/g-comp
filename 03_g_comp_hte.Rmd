@@ -1,0 +1,533 @@
+---
+title: "G-Computation: Heterogeneous Treatment Effect Estimation"
+author: "Nanum Jeon"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    highlight: tango
+---
+ 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  fig.width = 10,
+  fig.height = 6
+)
+
+
+# Load required libraries
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(randomForest)
+library(ggplot2)
+library(gridExtra)
+library(caret)
+
+```
+
+
+# Introduction
+
+This tutorial demonstrates g-methods comparing traditional parametric approaches with machine learning methods. We'll show when flexible models like random forests provide advantages over linear models in causal inference, particularly when relationships are highly non-linear.
+
+
+## Study Settings
+
+We examine the effect of HIV treatment ($A$) on CD4 count ($Y$) to demonstrate how to use g-computation for heterogeneous treatment effect estimation:
+
+1. **Complex data**: Highly non-linear relationships with multiple confounders  
+3. **Model Comparison**: Linear Regression, Polynomial Regression, and Random Forest
+
+The data setting is the same from the tutorial 2 for complex data. 
+
+Our variables are:
+
+- $Z_1$: HIV viral load at baseline (0 = low, 1 = high); 1 indicates worse baseline condition
+- $Z_2$: Age
+- $Z_3$: Rural Residency (0 = urban, 1 = rural)
+- $A$: Treatment status (0 = no treatment, 1 = treatment)  
+- $Y$: CD4 count outcome; higher values indicate better immune function
+
+# Complex Non-linear Data
+
+Now let's create data with strong non-linear relationships to demonstrate when Random Forest excels:
+
+```{r complex-data-generation}
+set.seed(42)
+n_obs <- 10000  # Enough sample for ML methods
+
+# Generate multiple confounders for richer interactions
+z1 <- runif(n_obs, 0, 100)    # Viral load
+z2 <- runif(n_obs, 20, 70)    # Age  
+z3 <- rbinom(n_obs, 1, 0.5)   # Rural (0/1)
+
+# Complex non-linear treatment assignment with smooth relationships
+treatment_logit <- -1.5 + 
+  # Smooth S-curve for viral load (sicker patients more likely to get treatment)
+  3 * plogis((z1 - 50) / 20) - 1.5 +
+  
+  # Smooth inverse-U for age (middle-aged more likely to get treatment)
+  2 * exp(-((z2 - 45) / 15)^2) - 0.5 +
+  
+  # Rural effect that varies smoothly with other variables
+  z3 * (0.5 + 0.02 * z1 - 0.01 * z2) +
+  
+  # Smooth interaction surfaces
+  0.015 * z1 * (z2 - 45) / 25 +                    # Viral load × Age interaction
+  0.3 * sin(z1 * pi / 50) * cos(z2 * pi / 40) +    # Trigonometric interaction
+  z3 * 0.2 * cos((z1 + z2) * pi / 80)              # Three-way interaction
+
+treatment_prob <- plogis(treatment_logit)
+a <- rbinom(n_obs, 1, treatment_prob)
+
+# Complex outcome model with baseline health declining with viral load and age
+baseline_outcome <- 200 - 1.5 * z1 + 0.01 * z1^2 +           # Viral load effect
+                   50 * exp(-((z2 - 40) / 12)^2) +            # Age effect (peak health ~40)
+                   z3 * (-30 - 0.3 * z1 + 0.5 * z2)           # Rural penalty
+
+# Highly heterogeneous treatment effects - the key for demonstrating RF advantage
+treatment_effect <- 
+  # Base effect varies smoothly with viral load
+  30 + 0.8 * z1 + 20 * tanh((z1 - 40) / 20) +       # Smooth transition around z1=40
+  
+  # Age modifies effectiveness (peak around age 45)
+  25 * exp(-((z2 - 45) / 18)^2) +                    
+  
+  # Rural creates complex interactions
+  z3 * (20 - 0.4 * z1 + 0.3 * z2) +                 
+  
+  # Smooth interactions that linear models struggle with
+  0.008 * z1 * z2 +                                  # Linear interaction
+  0.15 * z1 * z3 +                                   # z1×z3 interaction
+  
+  # Non-linear patterns
+  15 * sin(z1 * pi / 60) * (1 + 0.5 * z3) +         # Sine modulation
+  10 * cos(z2 * pi / 50) * exp(-z1 / 100) +         # Decaying cosine
+  
+  # Regional "sweet spots" where treatment works exceptionally well
+  20 * exp(-((z1 - 30)^2 + (z2 - 40)^2) / 400) +    # Gaussian sweet spot
+  15 * exp(-((z1 - 70)^2 + (z2 - 50)^2) / 500) * z3 # Another for Rural patients
+
+# Final outcome with moderate noise
+y <- baseline_outcome + a * treatment_effect + rnorm(n_obs, 0, 25)
+
+# Create dataset
+data_complex <- data.frame(
+  z1 = z1, z2 = z2, z3 = z3, 
+  a = a, y = y,
+  true_te = treatment_effect
+)
+
+# Summary statistics
+summary_stats <- data_complex %>%
+  summarise(
+    n = n(),
+    z1_mean = mean(z1), z1_sd = sd(z1),
+    z2_mean = mean(z2), z2_sd = sd(z2),
+    z3_mean = mean(z3),
+    prop_treated = mean(a),
+    y_mean = mean(y), y_sd = sd(y),
+    te_mean = mean(true_te), te_sd = sd(true_te)
+  )
+
+kable(summary_stats,
+      caption = "Table 2: Complex Data Summary Statistics",
+      col.names = c("N", "Z1 Mean", "Z1 SD", "Z2 Mean", "Z2 SD", "Z3 Mean", 
+                   "Prop. Treated", "Y Mean", "Y SD", "TE Mean", "TE SD"),
+      digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+## Visualizing Non-linear Relationships
+
+```{r complex-visualization}
+# Treatment probability by viral load and age
+p1 <- ggplot(data_complex, aes(x = z1, y = z2, color = factor(a))) +
+  geom_point(alpha = 0.4, size = 0.8) +
+  labs(title = "Treatment Assignment Pattern",
+       subtitle = "Complex non-linear assignment based on viral load and age",
+       x = "Viral Load (Z1)", y = "Age (Z2)", color = "Treatment") +
+  scale_color_manual(values = c("red", "blue"), labels = c("Untreated", "Treated")) +
+  theme_minimal()
+
+# Treatment effect surface (for patients without Rural)
+grid_size <- 40
+z1_grid <- seq(0, 100, length.out = grid_size)
+z2_grid <- seq(20, 70, length.out = grid_size)
+
+te_surface <- expand.grid(z1 = z1_grid, z2 = z2_grid) %>%
+  mutate(z3 = 0) %>%  # Show for z3 = 0
+  mutate(
+    te = 30 + 0.8 * z1 + 20 * tanh((z1 - 40) / 20) +
+         25 * exp(-((z2 - 45) / 18)^2) +
+         z3 * (20 - 0.4 * z1 + 0.3 * z2) +
+         0.008 * z1 * z2 +
+         0.15 * z1 * z3 +
+         15 * sin(z1 * pi / 60) * (1 + 0.5 * z3) +
+         10 * cos(z2 * pi / 50) * exp(-z1 / 100) +
+         20 * exp(-((z1 - 30)^2 + (z2 - 40)^2) / 400) +
+         15 * exp(-((z1 - 70)^2 + (z2 - 50)^2) / 500) * z3
+  )
+
+p2 <- ggplot(te_surface, aes(x = z1, y = z2, fill = te)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", 
+                      midpoint = median(te_surface$te), name = "Treatment\nEffect") +
+  labs(title = "True Treatment Effect Surface (No Rural)",
+       subtitle = "Complex non-linear heterogeneity with interaction hotspots",
+       x = "Viral Load (Z1)", y = "Age (Z2)") +
+  theme_minimal()
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+# Model Fitting and Comparison
+
+## Fit All Models
+
+```{r model-fitting}
+# Linear models (using all three confounders)
+outcome_model_linear <- lm(y ~ a + z1 + z2 + z3, data = data_complex)
+
+# Polynomial model with modest flexibility (doesn't mirror DGP structure)
+outcome_model_poly <- lm(y ~ a * (z1 + I(z1^3) + z2 + z3) + 
+                        z1:z2 + z2:z3, data = data_complex)
+
+# Random Forest models with proper hyperparameters
+set.seed(123)
+outcome_model_rf <- randomForest(y ~ a + z1 + z2 + z3, data = data_complex, 
+                                ntree = 2000,        # More trees for stability
+                                nodesize = 20,       # Larger nodes (less overfitting)
+                                mtry = 2,           # Fewer variables per split
+                                maxnodes = 200,     # Limit complexity
+                                importance = TRUE)
+
+# Model performance summaries
+cat("Model Performance Summary:\n")
+cat("Linear outcome R²:", round(summary(outcome_model_linear)$r.squared, 3), "\n")
+cat("Polynomial outcome R²:", round(summary(outcome_model_poly)$r.squared, 3), "\n")
+cat("RF outcome % Var Explained:", round(tail(outcome_model_rf$rsq, 1), 3), "\n")
+```
+
+## G-Formula Implementation for ATE 
+
+```{r gformula-implementation}
+# Simulation setup
+set.seed(456)
+sim_n <- 10000
+
+# Sample from marginal distributions of confounders
+z1_sim <- sample(data_complex$z1, size = sim_n, replace = TRUE)
+z2_sim <- sample(data_complex$z2, size = sim_n, replace = TRUE)
+z3_sim <- sample(data_complex$z3, size = sim_n, replace = TRUE)
+
+sim_data <- data.frame(z1 = z1_sim, z2 = z2_sim, z3 = z3_sim)
+
+# Calculate true ATE on simulation sample
+true_te_sim <- 30 + 0.8 * z1_sim + 20 * tanh((z1_sim - 40) / 20) +
+               25 * exp(-((z2_sim - 45) / 18)^2) +
+               z3_sim * (20 - 0.4 * z1_sim + 0.3 * z2_sim) +
+               0.008 * z1_sim * z2_sim +
+               0.15 * z1_sim * z3_sim +
+               15 * sin(z1_sim * pi / 60) * (1 + 0.5 * z3_sim) +
+               10 * cos(z2_sim * pi / 50) * exp(-z1_sim / 100) +
+               20 * exp(-((z1_sim - 30)^2 + (z2_sim - 40)^2) / 400) +
+               15 * exp(-((z1_sim - 70)^2 + (z2_sim - 50)^2) / 500) * z3_sim
+
+true_ate <- mean(true_te_sim)
+
+# Linear model predictions
+y_linear_treated <- predict(outcome_model_linear, newdata = sim_data %>% mutate(a = 1))
+y_linear_untreated <- predict(outcome_model_linear, newdata = sim_data %>% mutate(a = 0))
+ate_linear <- mean(y_linear_treated) - mean(y_linear_untreated)
+
+# Polynomial model predictions
+y_poly_treated <- predict(outcome_model_poly, newdata = sim_data %>% mutate(a = 1))
+y_poly_untreated <- predict(outcome_model_poly, newdata = sim_data %>% mutate(a = 0))
+ate_poly <- mean(y_poly_treated) - mean(y_poly_untreated)
+
+# Random Forest predictions
+y_rf_treated <- predict(outcome_model_rf, newdata = sim_data %>% mutate(a = 1))
+y_rf_untreated <- predict(outcome_model_rf, newdata = sim_data %>% mutate(a = 0))
+ate_rf <- mean(y_rf_treated) - mean(y_rf_untreated)
+
+# Crude estimate
+crude_treated <- mean(data_complex$y[data_complex$a == 1])
+crude_untreated <- mean(data_complex$y[data_complex$a == 0])
+crude_ate <- crude_treated - crude_untreated
+```
+
+# Results Comparison
+
+```{r results-comparison}
+# Create comprehensive results table
+results_comparison <- data.frame(
+  Method = c("True ATE", "Crude (Unadjusted)", "Linear G-Formula", 
+             "Polynomial G-Formula", "Random Forest G-Formula"),
+  ATE_Estimate = c(round(true_ate, 2), round(crude_ate, 2), round(ate_linear, 2), 
+                   round(ate_poly, 2), round(ate_rf, 2)),
+  Bias = c(0, round(crude_ate - true_ate, 2), round(ate_linear - true_ate, 2),
+           round(ate_poly - true_ate, 2), round(ate_rf - true_ate, 2)),
+  Abs_Bias = c(0, round(abs(crude_ate - true_ate), 2), round(abs(ate_linear - true_ate), 2),
+               round(abs(ate_poly - true_ate), 2), round(abs(ate_rf - true_ate), 2)),
+  Notes = c("Oracle truth", "Ignores confounding", "Simple linear model", 
+                         "Cubic + interactions", "Flexible ML approach")
+)
+
+kable(results_comparison,
+      caption = "Table 3: G-Formula Results Comparison",
+      col.names = c("Method", "ATE Estimate", "Bias", "Absolute Bias", "Notes")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+# Performance insights
+linear_bias <- results_comparison$Abs_Bias[3]      # Linear only
+poly_bias <- results_comparison$Abs_Bias[4]        # Polynomial only
+rf_bias <- results_comparison$Abs_Bias[5]          # Random Forest
+best_parametric_bias <- min(linear_bias, poly_bias) # Best parametric approach
+
+cat("\n*** KEY FINDINGS ***\n")
+cat("True ATE:", round(true_ate, 2), "\n")
+cat("Linear model bias:", round(linear_bias, 2), "\n")
+cat("Polynomial model bias:", round(poly_bias, 2), "\n")
+cat("Random Forest bias:", round(rf_bias, 2), "\n")
+
+if(rf_bias < linear_bias) {
+  rf_vs_linear <- round(linear_bias / rf_bias, 1)
+  cat("✓ Random Forest performs", rf_vs_linear, "times better than linear model!\n")
+} else {
+  cat("Linear model performs similarly to or better than Random Forest.\n")
+}
+
+if(rf_bias < best_parametric_bias) {
+  rf_vs_best_param <- round(best_parametric_bias / rf_bias, 1)
+  cat("✓ Random Forest performs", rf_vs_best_param, "times better than best parametric method!\n")
+} else {
+  cat("Parametric methods perform similarly to or better than Random Forest.\n")
+}
+```
+
+# Model Performance Analysis
+
+```{r performance-analysis}
+# Cross-validation comparison
+set.seed(789)
+cv_folds <- createFolds(data_complex$y, k = 5)
+
+# Function to calculate RMSE
+calculate_rmse <- function(actual, predicted) {
+  sqrt(mean((actual - predicted)^2, na.rm = TRUE))
+}
+
+# Initialize RMSE vectors
+rmse_linear <- rmse_poly <- rmse_rf <- numeric(5)
+
+# Cross-validation loop
+for(i in 1:5) {
+  train_idx <- unlist(cv_folds[-i])
+  test_idx <- cv_folds[[i]]
+  
+  train_data <- data_complex[train_idx, ]
+  test_data <- data_complex[test_idx, ]
+  
+  # Fit models
+  linear_cv <- lm(y ~ a + z1 + z2 + z3, data = train_data)
+  poly_cv <- lm(y ~ a * (z1 + I(z1^3) + z2 + z3) + z1:z2 + z2:z3, data = train_data)
+  rf_cv <- randomForest(y ~ a + z1 + z2 + z3, data = train_data, 
+                       ntree = 1000, nodesize = 20, mtry = 2)
+  
+  # Predictions
+  pred_linear <- predict(linear_cv, test_data)
+  pred_poly <- predict(poly_cv, test_data)
+  pred_rf <- predict(rf_cv, test_data)
+  
+  # RMSE calculation
+  rmse_linear[i] <- calculate_rmse(test_data$y, pred_linear)
+  rmse_poly[i] <- calculate_rmse(test_data$y, pred_poly)
+  rmse_rf[i] <- calculate_rmse(test_data$y, pred_rf)
+}
+
+# Performance summary
+performance_summary <- data.frame(
+  Model = c("Linear", "Polynomial", "Random Forest"),
+  Mean_RMSE = c(mean(rmse_linear), mean(rmse_poly), mean(rmse_rf)),
+  SD_RMSE = c(sd(rmse_linear), sd(rmse_poly), sd(rmse_rf)),
+  Improvement_vs_Linear = c("—", 
+                           paste0(round((mean(rmse_linear) - mean(rmse_poly))/mean(rmse_linear)*100, 1), "%"),
+                           paste0(round((mean(rmse_linear) - mean(rmse_rf))/mean(rmse_linear)*100, 1), "%"))
+)
+
+kable(performance_summary,
+      caption = "Table 4: Cross-Validation Performance",
+      col.names = c("Model", "Mean RMSE", "SD RMSE", "Improvement"),
+      digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+# Treatment Effect Visualization
+
+```{r treatment-effect-visualization}
+# Compare model predictions across viral load (fixing age=40, rural=0)
+z1_plot_range <- seq(0, 100, length.out = 100)
+plot_data_fixed <- data.frame(z1 = z1_plot_range, z2 = 40, z3 = 0)
+
+# Calculate true treatment effect for this slice
+true_te_plot <- 30 + 0.8 * z1_plot_range + 20 * tanh((z1_plot_range - 40) / 20) +
+                25 * exp(-((40 - 45) / 18)^2) +
+                0 * (20 - 0.4 * z1_plot_range + 0.3 * 40) +
+                0.008 * z1_plot_range * 40 +
+                0.15 * z1_plot_range * 0 +
+                15 * sin(z1_plot_range * pi / 60) * (1 + 0.5 * 0) +
+                10 * cos(40 * pi / 50) * exp(-z1_plot_range / 100) +
+                20 * exp(-((z1_plot_range - 30)^2 + (40 - 40)^2) / 400) +
+                15 * exp(-((z1_plot_range - 70)^2 + (40 - 50)^2) / 500) * 0
+
+# Model predictions
+pred_linear_treated <- predict(outcome_model_linear, newdata = plot_data_fixed %>% mutate(a = 1))
+pred_linear_untreated <- predict(outcome_model_linear, newdata = plot_data_fixed %>% mutate(a = 0))
+te_linear <- pred_linear_treated - pred_linear_untreated
+
+pred_poly_treated <- predict(outcome_model_poly, newdata = plot_data_fixed %>% mutate(a = 1))
+pred_poly_untreated <- predict(outcome_model_poly, newdata = plot_data_fixed %>% mutate(a = 0))
+te_poly <- pred_poly_treated - pred_poly_untreated
+
+pred_rf_treated <- predict(outcome_model_rf, newdata = plot_data_fixed %>% mutate(a = 1))
+pred_rf_untreated <- predict(outcome_model_rf, newdata = plot_data_fixed %>% mutate(a = 0))
+te_rf <- pred_rf_treated - pred_rf_untreated
+
+# Create plotting dataframe
+te_df <- data.frame(
+  z1 = rep(z1_plot_range, 4),
+  treatment_effect = c(true_te_plot, te_linear, te_poly, te_rf),
+  model = rep(c("True Effect", "Linear", "Polynomial", "Random Forest"), each = 100)
+)
+
+# Plot treatment effects
+p_te <- ggplot(te_df, aes(x = z1, y = treatment_effect, color = model, linetype = model)) +
+  geom_line(size = 1.2) +
+  labs(title = "Treatment Effect by Viral Load (Age=40, No Rural)",
+       subtitle = "Model comparison showing Random Forest's ability to capture non-linear patterns",
+       x = "Viral Load (Z1)", y = "Treatment Effect",
+       color = "Model", linetype = "Model") +
+  theme_minimal() +
+  scale_color_manual(values = c("black", "red", "blue", "darkgreen")) +
+  scale_linetype_manual(values = c("solid", "dashed", "dotted", "solid")) +
+  theme(legend.position = "bottom")
+
+print(p_te)
+```
+
+
+
+## G-Formula Implementation for CATE for Urban Residents (Z3 = 0) 
+
+```{r gformula-cate-implementation}
+# Simulation setup
+set.seed(456)
+sim_n <- 10000 
+
+# Calculate true treatment effects function
+calculate_true_te <- function(z1, z2, z3) {
+  30 + 0.8 * z1 + 20 * tanh((z1 - 40) / 20) +
+  25 * exp(-((z2 - 45) / 18)^2) +
+  z3 * (20 - 0.4 * z1 + 0.3 * z2) +
+  0.008 * z1 * z2 +
+  0.15 * z1 * z3 +
+  15 * sin(z1 * pi / 60) * (1 + 0.5 * z3) +
+  10 * cos(z2 * pi / 50) * exp(-z1 / 100) +
+  20 * exp(-((z1 - 30)^2 + (z2 - 40)^2) / 400) +
+  15 * exp(-((z1 - 70)^2 + (z2 - 50)^2) / 500) * z3
+}
+
+# True CATE for urban residents
+true_te_urban <- calculate_true_te(z1_sim[z3_sim == 0], z2_sim[z3_sim == 0], 0)
+true_cate_urban <- mean(true_te_urban)
+
+# Create urban subgroup dataset 
+sim_data_urban <- sim_data[z3_sim == 0, ]
+
+# Linear model CATE predictions
+y_linear_treated_urban <- predict(outcome_model_linear, newdata = sim_data_urban %>% mutate(a = 1))
+y_linear_untreated_urban <- predict(outcome_model_linear, newdata = sim_data_urban %>% mutate(a = 0))
+cate_linear_urban <- mean(y_linear_treated_urban) - mean(y_linear_untreated_urban)
+
+# Polynomial model CATE predictions
+y_poly_treated_urban <- predict(outcome_model_poly, newdata = sim_data_urban %>% mutate(a = 1))
+y_poly_untreated_urban <- predict(outcome_model_poly, newdata = sim_data_urban %>% mutate(a = 0))
+cate_poly_urban <- mean(y_poly_treated_urban) - mean(y_poly_untreated_urban)
+
+# Random Forest CATE predictions
+y_rf_treated_urban <- predict(outcome_model_rf, newdata = sim_data_urban %>% mutate(a = 1))
+y_rf_untreated_urban <- predict(outcome_model_rf, newdata = sim_data_urban %>% mutate(a = 0))
+cate_rf_urban <- mean(y_rf_treated_urban) - mean(y_rf_untreated_urban)
+
+# Crude estimates for urban subgroup
+crude_treated_urban <- mean(data_complex$y[data_complex$a == 1 & data_complex$z3 == 0])
+crude_untreated_urban <- mean(data_complex$y[data_complex$a == 0 & data_complex$z3 == 0])
+crude_cate_urban <- crude_treated_urban - crude_untreated_urban
+```
+
+# CATE Results for Urban Residents
+
+```{r cate-results-comparison}
+# Create CATE results table
+cate_results <- data.frame(
+  Method = c("True CATE", "Crude (Unadjusted)", "Linear G-Formula", 
+             "Polynomial G-Formula", "Random Forest G-Formula"),
+  CATE_Estimate = c(round(true_cate_urban, 2), round(crude_cate_urban, 2), 
+                    round(cate_linear_urban, 2), round(cate_poly_urban, 2), 
+                    round(cate_rf_urban, 2)),
+  Bias = c(0, round(crude_cate_urban - true_cate_urban, 2), 
+           round(cate_linear_urban - true_cate_urban, 2),
+           round(cate_poly_urban - true_cate_urban, 2), 
+           round(cate_rf_urban - true_cate_urban, 2)),
+  Abs_Bias = c(0, round(abs(crude_cate_urban - true_cate_urban), 2), 
+               round(abs(cate_linear_urban - true_cate_urban), 2),
+               round(abs(cate_poly_urban - true_cate_urban), 2), 
+               round(abs(cate_rf_urban - true_cate_urban), 2))
+)
+
+kable(cate_results,
+      caption = "Table 3: CATE Results for Urban Residents (Z3 = 0)",
+      col.names = c("Method", "CATE Estimate", "Bias", "Absolute Bias")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+# Performance insights
+cat("\n*** CATE FINDINGS FOR URBAN RESIDENTS ***\n")
+cat("True Urban CATE:", round(true_cate_urban, 2), "\n")
+
+# Best performing method for urban subgroup
+urban_methods <- c("Crude", "Linear", "Polynomial", "Random Forest")
+urban_biases <- c(abs(crude_cate_urban - true_cate_urban),
+                  abs(cate_linear_urban - true_cate_urban), 
+                  abs(cate_poly_urban - true_cate_urban), 
+                  abs(cate_rf_urban - true_cate_urban))
+best_urban_method <- urban_methods[which.min(urban_biases)]
+
+cat("Best method for Urban CATE:", best_urban_method, "(absolute bias =", round(min(urban_biases), 2), ")\n")
+
+# Performance ranking
+method_ranking <- data.frame(
+  Rank = 1:4,
+  Method = urban_methods[order(urban_biases)],
+  Absolute_Bias = round(sort(urban_biases), 2)
+)
+
+kable(method_ranking,
+      caption = "Table 4: Method Performance Ranking for Urban CATE",
+      col.names = c("Rank", "Method", "Absolute Bias")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+# Summary  
+
+## G-Computation for Conditional Average Treatment Effect (CATE) Estimation
+
+This tutorial demonstrates that **G-computation naturally extends to estimating conditional average treatment effects (CATE)** by leveraging its ability to predict individual-level potential outcomes. Unlike methods that only estimate population-average effects, G-computation generates predictions for each individual under both treatment conditions, enabling subgroup-specific causal inference. 

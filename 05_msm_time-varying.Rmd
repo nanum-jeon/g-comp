@@ -1,0 +1,280 @@
+---
+title: "Marginal Structural Models: Time-Varying Setting"
+author: "Nanum Jeon"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Introduction
+
+This tutorial focuses on **Marginal Structural Models (MSM)** using **Inverse Probability Weighting (IPW)** to estimate the average causal effects of always taking treatment compared to never taking treatment. MSMs provide an alternative to the g-formula for handling time-varying confounders and are particularly useful when modeling complex treatment-confounder relationships is challenging.
+
+From our knowledge of the data-generating process, we know the true average causal effect to be **50**.
+
+## Load Required Libraries
+
+```{r libraries}
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+```
+
+## Our Settings
+
+The empirical setting is to treat HIV with a therapy regimen (A) in two time periods (t = 0, t = 1). We measure the time-varying confounder, HIV viral load (Z), at times t = 0 and t = 1. Our outcome is the CD4 count (cells/mm³) observed at t = 2.
+
+**Objective**: Estimate the causal effect of always being treated vs. never being treated on HIV outcomes.
+
+**Variables**:
+
+- **A0, A1**: Treatment at times 0 and 1 (0 = no treatment, 1 = treatment)
+- **Z0 = 1** for all subjects (high viral load at baseline); 1 indicates worse baseline condition.  
+- **Z1**: Time-varying confounder (HIV viral load at time 1; 0 = low, 1 = high) 
+- **Y**: Outcome (CD4 count at time 2); higher values indicate better immune function.
+
+**Causal structure**: Z0 → A0 → Z1 → A1 → Y  
+
+**Target estimand**: E[Y^{1,1}] - E[Y^{0,0}] (always treated vs. never treated)
+
+
+**Data Structure:** Z₀ → A₀ → Z₁ → A₁ → Y
+
+We assume Z₀ = 1 (high viral load) for all subjects at baseline.
+
+## Data Setup
+
+```{r data_setup}
+# Data in Table 1 
+# A0: Treatment at time 0 (for HIV)
+# Z1: HIV viral load measurement prior to time 1 (Higher: Worse health condition)
+# A1: Treatment at time 1
+# Y: Mean of CD4 counts 
+# N: Number of subjects 
+
+a0 <- c(0, 0, 0, 0, 1, 1, 1, 1)
+z1 <- c(0, 0, 1, 1, 0, 0, 1, 1)
+a1 <- c(0, 1, 0, 1, 0, 1, 0, 1)
+y <- c(87.288, 112.107, 119.654, 144.842, 105.282, 130.184, 137.720, 162.832)
+n <- c(209271, 93779, 60657, 136293, 134781, 60789, 93903, 210527)
+
+data <- data.frame(a0, z1, a1, y, n)
+
+# Display the data
+kable(data, caption = "Original Data Structure") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+# Marginal Structural Models Approach
+
+## Introduction to MSM
+
+Marginal Structural Models map the marginal summary (e.g., average) of potential outcomes to treatment trajectories. Unlike the g-formula, MSMs require less modeling of time-varying variables by using inverse probability weighting to create a pseudo-population where treatment assignment is independent of confounders.
+
+The MSM approach involves three key steps:
+1. **Model treatment probabilities** at each time point
+2. **Calculate inverse probability weights** 
+3. **Fit outcome model** using weighted data
+
+## Step 1: Expand Data to Individual Level
+
+First, we need to expand our aggregated data to individual-level observations for MSM analysis.
+
+```{r expand_data}
+# Expand data to individual level based on sample sizes
+expanded_data <- data %>%
+  rowwise() %>%
+  do(data.frame(
+    a0 = rep(.$a0, .$n),
+    z1 = rep(.$z1, .$n),
+    a1 = rep(.$a1, .$n),
+    y = rep(.$y, .$n)
+  )) %>%
+  ungroup()
+
+# Add individual IDs
+expanded_data$id <- 1:nrow(expanded_data)
+
+print(paste("Total individuals:", nrow(expanded_data)))
+print("Random sample of individuals:")
+set.seed(123)  # For reproducible random sample
+expanded_data %>%
+  sample_n(10) %>%
+  arrange(id) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Step 2: Model Treatment Probabilities
+
+We model the probability of receiving treatment at each time point conditional on past history.
+
+```{r treatment_models}
+# Model for A0: Treatment at time 0
+# Since Z0 = 1 for everyone, we model A0 as depending on baseline characteristics
+# For simplicity, we'll model P(A0 = 1) as a constant
+prob_a0_1 <- mean(expanded_data$a0)
+print(paste("Probability of A0 = 1:", round(prob_a0_1, 4)))
+
+# Model for A1: Treatment at time 1 given Z1 and A0
+a1_model <- glm(a1 ~ z1 + a0, family = binomial(), data = expanded_data)
+summary(a1_model)
+
+# Predict treatment probabilities
+expanded_data$prob_a0 <- ifelse(expanded_data$a0 == 1, prob_a0_1, 1 - prob_a0_1)
+expanded_data$prob_a1_given_history <- predict(a1_model, type = "response")
+expanded_data$prob_a1 <- ifelse(expanded_data$a1 == 1, 
+                                expanded_data$prob_a1_given_history,
+                                1 - expanded_data$prob_a1_given_history)
+```
+
+## Step 3: Calculate Inverse Probability Weights
+
+The inverse probability weights create a pseudo-population where treatment is independent of confounders.
+
+```{r ipw_calculation}
+# Calculate inverse probability weights
+expanded_data$ipw <- 1 / (expanded_data$prob_a0 * expanded_data$prob_a1)
+
+# Check weight distributions
+print("Weight Summary Statistics:")
+weight_summary <- expanded_data %>%
+  summarise(
+    Mean_IPW = mean(ipw),
+    SD_IPW = sd(ipw),
+    Min_IPW = min(ipw),
+    Max_IPW = max(ipw)
+  )
+
+weight_summary %>%
+  kable(digits = 4, caption = "Inverse Probability Weight Distribution Summary") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+
+## Step 4: Visualize Weight Distribution
+
+```{r weight_plots}
+# Create weight distribution plot
+ggplot(expanded_data, aes(x = ipw)) +
+  geom_histogram(alpha = 0.7, bins = 50, fill = "steelblue") +
+  theme_minimal() +
+  labs(title = "Distribution of Inverse Probability Weights",
+       x = "Weight Value",
+       y = "Frequency")
+```
+
+
+## Step 5: Fit Marginal Structural Model
+
+Now we fit the outcome model using the weighted data to estimate causal effects.
+
+```{r msm_fitting}
+# Fit MSM using inverse probability weights
+# The model directly estimates marginal causal effects
+msm_model <- lm(y ~ a0 + a1, data = expanded_data, weights = ipw)
+
+print("MSM Model Summary:")
+summary(msm_model)
+
+# Extract coefficients for interpretation
+coef_summary <- broom::tidy(msm_model)
+kable(coef_summary, digits = 4, caption = "MSM Model Coefficients") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Step 6: Estimate Causal Effects
+
+Using the fitted MSM, we can estimate potential outcomes under different treatment regimens.
+
+```{r causal_effects}
+# Create data for prediction under different treatment scenarios
+scenario_data <- data.frame(
+  scenario = c("Never treated", "Always treated", "Treated at t=0 only", "Treated at t=1 only"),
+  a0 = c(0, 1, 1, 0),
+  a1 = c(0, 1, 0, 1)
+)
+
+# Predict potential outcomes
+scenario_data$potential_outcome <- predict(msm_model, newdata = scenario_data)
+
+# Calculate causal effect: Always treated vs Never treated
+tau_msm <- scenario_data$potential_outcome[2] - scenario_data$potential_outcome[1]
+
+print(paste("MSM Estimated Causal Effect (τ):", round(tau_msm, 4)))
+print(paste("True Causal Effect:", 50))
+print(paste("Bias:", round(tau_msm - 50, 4)))
+
+# Display all scenarios
+kable(scenario_data, digits = 4, 
+      caption = "Potential Outcomes Under Different Treatment Scenarios") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Step 7: Check Balance After Weighting
+
+One key advantage of IPW is that it should balance confounders across treatment groups in the weighted sample.
+
+
+```{r balance_check}
+# Check balance of Z1 across A1 groups
+balance_check_a1 <- expanded_data %>%
+  group_by(a1) %>%
+  summarise(
+    n = n(),
+    mean_z1_unweighted = mean(z1),
+    mean_z1_weighted = weighted.mean(z1, ipw),
+    .groups = 'drop'
+  )
+
+print("Balance Check - Z1 by A1:")
+kable(balance_check_a1, digits = 4,
+      caption = "Balance of Z1 across A1 groups (Before and After Weighting)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+```{r final_results}
+# Create comprehensive results table
+results_summary <- data.frame(
+  Method = c("True Effect", "MSM (Inverse Probability Weighting)"),
+  Estimated_Effect = c(50, round(tau_msm, 4)),
+  Bias = c(0, round(tau_msm - 50, 4))
+)
+
+kable(results_summary, 
+      caption = "Summary of Causal Effect Estimates",
+      digits = 4) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+cat("\n")
+cat("Key Findings:\n")
+cat("- MSM with inverse probability weighting provides a causal effect estimate\n")
+cat("- IPW successfully balances confounders in the weighted pseudo-population\n")
+cat("- MSM offers a flexible alternative to g-formula for time-varying confounders\n")
+cat("- Less modeling required compared to g-formula approach\n")
+```
+
+
+# Summary 
+
+Marginal Structural Models with Inverse Probability Weighting is an alternative method to the g-formula for causal inference with time-varying confounders. The method creates a pseudo-population where treatment assignment is independent of confounders, allowing for unbiased estimation of causal effects.
+
+## Some notes regarding MSM:
+
+- **Intuitive interpretation**: Direct estimation of marginal causal effects
+- **Weight variability**: Extreme weights can lead to instability
+- **Model specification**: Requires correct specification of treatment models
+
+## References
+
+Naimi, A. I., Cole, S. R., & Kennedy, E. H. (2017). An introduction to g methods. *International Journal of Epidemiology*, 46(2), 756-762.
+ 
